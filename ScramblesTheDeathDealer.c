@@ -7,6 +7,23 @@
 *  Author: poop
 */
 
+/*
+*STILL TODO:
+*  SCRAMBLES:
+*	MAKE FUNCTIONS FOR DRIVING
+*	SERVO CONTROLS
+*	NRF24L01 COMMUNICATION
+*	MAKE CIRCUIT BOARD
+*	???
+*	
+*  CONTROL:
+*	NRF24L01 COMMUNICATION
+*	HACK OPEN CHEAP CONTROLLER
+*	MAKE CIRCUIT BOARD
+*
+*
+*/
+
 #define F_CPU 16000000
 
 #include <avr/io.h>
@@ -26,7 +43,8 @@ char m1d, m2d;
 
 int main(void)
 {
-	//Enable PD0 and PD6 for direction and PB1 and PB2 for duty cycle
+	//Enable PD0 and PD1 for direction and PD5 and PD6 for PWM
+	//TODO:CHANGE PD0 AND PD1 TO SOMETHING ELSE FOR POSSIBLE SERIAL TERMINAL
 	DDRD |= (1 << DDD0)|(1 << DDD1)|(1 << DDD5)|(1 << DDD6);
 	DDRC |= (1 << DDC0)|(1 << DDC1);
 	
