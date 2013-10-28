@@ -1,7 +1,34 @@
 /*
 * ScramblesTheDeathDealer.c
 *
-*
+*	PORTB
+*	0	
+*	1	CE pin on NRF24L01+
+*	2	SS(CS) pin on NRF24L01+
+*	3	MOSI pin on NRF24L01+
+*	4	MISO pin on NRF24L01+
+*	5	SCK pin on NRF24L01+
+*	6	
+*	7	
+*	
+*	PORTC
+*	0	Motor analog stick X
+*	1	Motor analog stick Y
+*	2	(Servo control stick X)
+*	3	(Servo control stick Y)
+*	4	
+*	5	
+*	6	RESET
+*	
+*	PORTD
+*	0	DEBUG RX
+*	1	DEBUT TX
+*	2	Left motor direction
+*	3	Right motor direction
+*	4	
+*	5	Left motor PWM
+*	6	Right motor PWM
+*	7	
 *
 * Created: 10/10/2013 12:46:50 AM
 *  Author: poop
@@ -28,24 +55,32 @@
 
 #include <avr/io.h>
 #include <util/delay.h>
+#include </nRF24L01.h>
 
 void motorControl(int m1Duty, char m1Dir , int m2Duty, char m2Dir);
-long map(long x, long in_min, long in_max, char out_min, char out_max);
+long map(long x, long in_min, long in_max, int out_min, int out_max);
 void enableADC(void);
 uint16_t readADC(uint8_t channel);
 void readJoysticks (int* xVal, int* yVal, char* leftDir, char* rightDir);
-long mapRev(long x, long in_min, long in_max, char out_min, char out_max);
+long mapRev(long x, long in_min, long in_max, int out_min, int out_max);
+void startADC(void);
+void stopADC(void);
+void driveForward(int dutym1, int dutym2);
+void driveBackward(int dutym1, int dutym2);
+void turnLeft(int dutym1, int dutym2);
+void turnRight(int dutym1, int dutym2);
+void enableSPI(void);
+void transmitSPI(char cData);
 
-const int dlyTime = 1000;
-long adc0Rd, adc1Rd;
+volatile long adc0Rd, adc1Rd;
 int m1,m2;
 char m1d, m2d;
 
 int main(void)
 {
-	//Enable PD0 and PD1 for direction and PD5 and PD6 for PWM
-	//TODO:CHANGE PD0 AND PD1 TO SOMETHING ELSE FOR POSSIBLE SERIAL TERMINAL
-	DDRD |= (1 << DDD0)|(1 << DDD1)|(1 << DDD5)|(1 << DDD6);
+	//Enable PD2 and PD3 for direction and PD5 and PD6 for PWM
+	DDRD |= (1 << DDD2)|(1 << DDD3)|(1 << DDD5)|(1 << DDD6);
+	//Enable PC0 for motor analog stick X and PC1 for motor analog stick Y
 	DDRC |= (1 << DDC0)|(1 << DDC1);
 	
 	enableADC();
@@ -60,12 +95,35 @@ int main(void)
 	}
 }
 
-long map(long x, long in_min, long in_max, char out_min, char out_max)
+void enableSPI(void)
+{
+	//Enable PB1 for CE pin on NRF24L01+
+	DDRB |= (1<<DDB1);
+	//Setup SPI pins PB2 SS(CS) OUTPUT, PB3 MOSI OUTPUT, PB4 MISO INPUT, PB5 SCK OUTPUT
+	DDRB |= (1<<DDB2)|(1 << DDB3)|(1 << DDB5);
+	DDRB &= ~(1 << DDB4);
+	
+	//Set MOSI and SCK output, all others input
+	DDR_SPI = (1<<DD_MOSI)|(1<<DD_SCK)|~(1<<DD_MISO);
+	
+	//Enable SPI, Master, set clock rate fck/16
+	SPCR = (1<<SPE)|(1<<MSTR)|(1<<SPR0);
+}
+void transmitSPI(char cData)
+{
+	//Start transmission
+	SPDR = cData;
+	//Wait for transmission complete
+	while(!(SPSR & (1<<SPIF)))
+	;
+}
+
+long map(long x, long in_min, long in_max, int out_min, int out_max)
 {
 	return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-long mapRev(long x, long in_min, long in_max, char out_min, char out_max)
+long mapRev(long x, long in_min, long in_max, int out_min, int out_max)
 {
 	return (x - in_min) * (out_min - out_max) / (in_max - in_min) + out_min;
 }
@@ -73,9 +131,21 @@ long mapRev(long x, long in_min, long in_max, char out_min, char out_max)
 void enableADC(void)
 {
 	//AVCC set to AREF voltage
-	ADMUX |= (1 << REFS0);
+	ADMUX |= (1 << REFS0)|(1 << REFS1);
+	//Disable digital inputs on ADC lines
+	DIDR0 |= (1 << ADC0D)|(1 << ADC1D)|(1 << ADC2D)|(1 << ADC3D)|(1 << ADC4D)|(1 << ADC5D);
 	//128 prescaller and enable the ADC
 	ADCSRA |= (1 << ADPS2)|(1 << ADPS1)|(1 << ADPS0)|(1 << ADEN);
+}
+
+void startADC(void)
+{
+	ADCSRA |= (1 << ADEN);
+}
+
+void stopADC(void)
+{
+	ADCSRA &= ~(1 << ADEN);
 }
 
 //channel 0 - 8
@@ -286,10 +356,10 @@ void motorControl(int m1Duty, char m1Dir , int m2Duty, char m2Dir)
 	switch (m1Dir)
 	{
 		case 0:
-		PORTD &= ~_BV(PD0);
+		PORTD &= ~_BV(PD2);
 		break;
 		case 1:
-		PORTD |= _BV(PD0);
+		PORTD |= _BV(PD2);
 		default:
 		break;
 	}
@@ -298,10 +368,10 @@ void motorControl(int m1Duty, char m1Dir , int m2Duty, char m2Dir)
 	switch (m2Dir)
 	{
 		case 0:
-		PORTD &= ~_BV(PD1);
+		PORTD &= ~_BV(PD3);
 		break;
 		case 1:
-		PORTD |= _BV(PD1);
+		PORTD |= _BV(PD3);
 		break;
 		default:
 		break;
@@ -316,14 +386,18 @@ void readJoysticks (int* xVal, int* yVal, char* leftDir, char* rightDir)
 	
 	//read joystick channels, they need to be read twice
 	//with delay because the ADC MUX isn't good for high speed
+	startADC();
 	ch0Rd = readADC(0);
+	stopADC();
 	_delay_ms(10);
-	ch0Rd = readADC(0);
-	_delay_ms(10);
+//	ch0Rd = readADC(0);
+//	_delay_ms(10);
+	startADC();
 	ch1Rd = readADC(1);
+	stopADC();
 	_delay_ms(10);
-	ch1Rd = readADC(1);
-	_delay_ms(10);
+//	ch1Rd = readADC(1);
+//	_delay_ms(10);
 	
 	//map the adc reads and determine direction
 	if (ch0Rd < 512)
@@ -347,4 +421,32 @@ void readJoysticks (int* xVal, int* yVal, char* leftDir, char* rightDir)
 		*yVal = map(ch1Rd, 512, 1024, 0, 255);
 		*rightDir = 1;
 	}
+}
+
+void driveForward(int dutym1, int dutym2)
+{
+	char dir1 = 1;
+	char dir2 = 1;
+	motorControl(dutym1, dir1, dutym2, dir2);
+}
+
+void driveBackward(int dutym1, int dutym2)
+{
+	char dir1 = 0;
+	char dir2 = 0;
+	motorControl(dutym1, dir1, dutym2, dir2);
+}
+
+void turnLeft(int dutym1, int dutym2)
+{
+	char dir1 = 0;
+	char dir2 = 1;
+	motorControl(dutym1, dir1, dutym2, dir2);
+}
+
+void turnRight(int dutym1, int dutym2)
+{
+	char dir1 = 1;
+	char dir2 = 0;
+	motorControl(dutym1, dir1, dutym2, dir2);
 }
