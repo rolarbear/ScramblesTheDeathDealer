@@ -51,6 +51,25 @@
 *
 */
 
+/*
+	first 32 bit payload
+		bits 0-8 has anything changed
+		bits 9-15 don't care
+		bits 16-19 D-PAD
+		bits 20-23 shape
+		bits 24-27 bumper buttons
+		bits 28-29 joystick click
+		bits 30-31 start/select
+		
+	second 32 bit payload
+		bits 0-15 x left joy
+		bits 16-31 y left joy
+	
+	third 32 bit payload
+		bits 0-15 x right joy
+		bits 16-31 y right joy
+*/
+
 #define F_CPU 16000000
 #define USART_BAUDRATE 9600
 #define BAUD_PRESCALE (((16000000 / (USART_BAUDRATE * 16UL)))-1)
@@ -59,11 +78,11 @@
 #include <util/delay.h>
 #include "nRF24L01.h"
 
-void motorControl(int m1Duty, char m1Dir , int m2Duty, char m2Dir);
+void motorControl(int m1Duty, uint8_t m1Dir , int m2Duty, uint8_t m2Dir);
 long map(long x, long in_min, long in_max, int out_min, int out_max);
 void enableADC(void);
 uint16_t readADC(uint8_t channel);
-void readJoysticks (int* xVal, int* yVal, char* leftDir, char* rightDir);
+void readJoysticks (int* xVal, int* yVal, uint8_t* leftDir, uint8_t* rightDir);
 long mapRev(long x, long in_min, long in_max, int out_min, int out_max);
 void startADC(void);
 void stopADC(void);
@@ -77,10 +96,12 @@ void disableSPI(void);
 char write_read_SPI(char cData);
 uint8_t GetReg(uint8_t reg);
 void writeReg(uint8_t reg, uint8_t val);
+void setCh(uint8_t chan);
+
 
 volatile long adc0Rd, adc1Rd;
 int m1,m2;
-char m1d, m2d;
+uint8_t m1d, m2d;
 int diagPrint = 1;
 
 int main(void)
@@ -119,14 +140,10 @@ int main(void)
 			while ((UCSR0A & (1 << UDRE0)) == 0) {};
 		}
 		while(stat != 0x0E){};
+		writeReg(CONFIG, 0x02);
+		writeReg(SETUP_RETR,0x7F);
 		writeReg(RF_CH,0x07);
-		while ((UCSR0A & (1 << UDRE0)) == 0) {};
-		UDR0 = (GetReg(RF_CH));
-		while ((UCSR0A & (1 << UDRE0)) == 0) {};
-		writeReg(RF_SETUP, 0x06);
-		while ((UCSR0A & (1 << UDRE0)) == 0) {};
-		UDR0 = (GetReg(RF_SETUP));
-		while ((UCSR0A & (1 << UDRE0)) == 0) {};
+		writeReg(RF_SETUP, 0x2E);
 		_delay_ms(50);
 	}
 	//while(1)
@@ -136,16 +153,37 @@ int main(void)
 	//}
 }
 
+uint8_t flushRx(void)
+{
+	uint8_t status = (write_read_SPI(FLUSH_RX));
+	return status;
+}
+
+uint8_t flushTx(void)
+{
+	uint8_t status = (write_read_SPI(FLUSH_TX));
+	return status;
+}
+
+void setCh(uint8_t chan)
+{
+	writeReg(RF_CH, chan);
+}
+
 uint8_t GetReg(uint8_t reg)
 {
 	//CSN low
 	PORTB &= ~(1 << DDB2);
+	
 	//Set R_Register
 	write_read_SPI(R_REGISTER + reg);
+	
 	//Send dummy receive register value
 	reg = write_read_SPI(NOP);
+	
 	//CSN high
 	PORTB |= (1 << DDB2);
+	
 	//return registry value that was read
 	return reg;
 }
@@ -156,7 +194,7 @@ void writeReg(uint8_t reg, uint8_t val)
 	PORTB &= ~(1 << DDB2);
 	
 	//Write register value
-	SPDR = reg;
+	SPDR = (W_REGISTER + reg);
 	//Wait for transmission complete
 	while(!(SPSR & (1<<SPIF)));
 	
@@ -215,12 +253,15 @@ long mapRev(long x, long in_min, long in_max, int out_min, int out_max)
 
 void enableADC(void)
 {
-	//AVCC set to AREF voltage
-	ADMUX |= (1 << REFS0)|(1 << REFS1);
-	//Disable digital inputs on ADC lines
-	DIDR0 |= (1 << ADC0D)|(1 << ADC1D)|(1 << ADC2D)|(1 << ADC3D)|(1 << ADC4D)|(1 << ADC5D);
 	//128 prescaller and enable the ADC
 	ADCSRA |= (1 << ADPS2)|(1 << ADPS1)|(1 << ADPS0)|(1 << ADEN);
+	//AVCC set to AREF voltage
+	ADMUX |= (1 << REFS0)/*|(1 << REFS1)*/;
+	
+	ADMUX |= (1 << ADLAR);
+	
+	//Disable digital inputs on ADC lines
+	DIDR0 |= (1 << ADC0D)|(1 << ADC1D)|(1 << ADC2D)|(1 << ADC3D)|(1 << ADC4D)|(1 << ADC5D);
 }
 
 void startADC(void)
@@ -415,16 +456,24 @@ uint16_t readADC(uint8_t channel)
 		break;
 	}
 	
+	//enable ADC
+	ADCSRA |= (1 << ADEN);
+	
 	//Start conversion
 	ADCSRA |= (1 << ADSC);
+	
 	//WAIT FOR IT!!!
 	while(ADCSRA & (1 << ADSC));
-	//BOOM!
+	
+	//disable ADC
+	ADCSRA &= ~(1 << ADEN);
+	
+	//BOOM! RETURN THAT SHIT
 	return ADC;
 }
 
 //m1Duty and m2Duty should be between 0 and 255
-void motorControl(int m1Duty, char m1Dir , int m2Duty, char m2Dir)
+void motorControl(int m1Duty, uint8_t m1Dir , int m2Duty, uint8_t m2Dir)
 {
 	//Set PWM value
 	OCR0A = (m1Duty);
@@ -441,10 +490,12 @@ void motorControl(int m1Duty, char m1Dir , int m2Duty, char m2Dir)
 	switch (m1Dir)
 	{
 		case 0:
-		PORTD &= ~_BV(PD2);
+		CLEARBIT(PORTD, DDD2);
+		//PORTD &= ~_BV(PD2);
 		break;
 		case 1:
-		PORTD |= _BV(PD2);
+		SETBIT(PORTD, DDD2);
+		//PORTD |= _BV(PD2);
 		default:
 		break;
 	}
@@ -453,10 +504,12 @@ void motorControl(int m1Duty, char m1Dir , int m2Duty, char m2Dir)
 	switch (m2Dir)
 	{
 		case 0:
-		PORTD &= ~_BV(PD3);
+		CLEARBIT(PORTD, DDD3);
+		//PORTD &= ~_BV(PD3);
 		break;
 		case 1:
-		PORTD |= _BV(PD3);
+		SETBIT(PORTD, DDD3);
+		//PORTD |= _BV(PD3);
 		break;
 		default:
 		break;
@@ -464,47 +517,48 @@ void motorControl(int m1Duty, char m1Dir , int m2Duty, char m2Dir)
 }
 
 
-void readJoysticks (int* xVal, int* yVal, char* leftDir, char* rightDir)
+void readJoysticks (int* xVal, int* yVal, uint8_t* leftDir, uint8_t* rightDir)
 {
 	//variables
 	long ch0Rd, ch1Rd;
 	
-	//read joystick channels, they need to be read twice
-	//with delay because the ADC MUX isn't good for high speed
-	startADC();
 	ch0Rd = readADC(0);
-	stopADC();
-	_delay_ms(10);
-	//	ch0Rd = readADC(0);
-	//	_delay_ms(10);
-	startADC();
+
 	ch1Rd = readADC(1);
-	stopADC();
-	_delay_ms(10);
-	//	ch1Rd = readADC(1);
-	//	_delay_ms(10);
+
+
 	
 	//map the adc reads and determine direction
-	if (ch0Rd < 512)
+	if (ch0Rd < 32650)
 	{
-		*xVal = mapRev(ch0Rd, 0, 511, 0, 255);
+		*xVal = (mapRev(ch0Rd, 32649, 0, 255, 0) - 254);
 		*leftDir = 0;
 	}
-	else
+	if (ch0Rd >=32850)
 	{
-		*xVal = map(ch0Rd, 512, 1024, 0, 255);
+		*xVal = map(ch0Rd, 32850, 65600, 0, 255);
 		*leftDir = 1;
 	}
-	
-	if (ch1Rd < 512)
+	if (ch0Rd > 32650 && ch0Rd < 32850)
 	{
-		*yVal = mapRev(ch1Rd, 0, 511, 0, 255);
+		*xVal = 0;
+		*leftDir = 0;
+	}
+	
+	if (ch1Rd < 32650)
+	{
+		*yVal = (mapRev(ch1Rd, 32649, 0, 255, 0) - 254);
 		*rightDir = 0;
 	}
-	else
+	if (ch1Rd >= 32850)
 	{
-		*yVal = map(ch1Rd, 512, 1024, 0, 255);
+		*yVal = map(ch1Rd, 32850, 65600, 0, 255);
 		*rightDir = 1;
+	}
+	if (ch1Rd >32650 && ch1Rd < 32850)
+	{
+		*yVal = 0;
+		*rightDir = 0;
 	}
 }
 
